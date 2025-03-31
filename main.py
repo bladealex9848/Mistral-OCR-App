@@ -965,7 +965,7 @@ with st.sidebar:
 
     # Intentar mostrar el logo si está disponible en línea
     try:
-        st.image("https://mistral.ai/_next/image?url=%2Fimg%2FM-beige.svg&w=640&q=75", width=200)
+        st.image("assets/logo.png", width=200)  # Asegúrate de que el archivo esté en la carpeta 'assets'
     except:
         # Si no se puede cargar la imagen, intentar mostrar un ícono SVG
         try:
