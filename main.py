@@ -9,6 +9,7 @@ import requests
 from pathlib import Path
 import io
 import mimetypes
+import traceback
 from PIL import Image
 
 # Configuración de la página con tema personalizado
@@ -206,6 +207,23 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# Configurar un manejo de errores global
+def catch_exceptions(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_msg = f"Error en {func.__name__}: {str(e)}"
+            st.error(error_msg)
+            st.code(traceback.format_exc(), language="python")
+            print(f"ERROR: {error_msg}")
+            traceback.print_exc()
+            return None
+
+    return wrapper
+
+
 # Inicializar parámetros de configuración en session_state
 if "config" not in st.session_state:
     st.session_state["config"] = {
@@ -230,6 +248,7 @@ if "processing_method" not in st.session_state:
 
 
 # Función para obtener la API key de diferentes fuentes
+@catch_exceptions
 def get_mistral_api_key():
     # 1. Intentar obtener de Streamlit secrets
     try:
@@ -251,6 +270,7 @@ api_key = get_mistral_api_key()
 
 
 # Función para verificar la API key
+@catch_exceptions
 def validate_api_key(api_key):
     if not api_key:
         return False, "No se ha proporcionado API key"
@@ -269,7 +289,8 @@ def validate_api_key(api_key):
         return False, f"Error de conexión: {str(e)}"
 
 
-# Función para procesar imagen utilizando API REST directamente (más confiable para imágenes)
+# Función para procesar imagen utilizando API REST directamente
+@catch_exceptions
 def process_image_with_rest(api_key, image_data):
     with st.status("Procesando imagen con REST API...", expanded=True) as status:
         status.update(label="Preparando imagen...", state="running")
@@ -287,7 +308,8 @@ def process_image_with_rest(api_key, image_data):
             # Intentar detectar el tipo MIME de la imagen
             image_format = Image.open(io.BytesIO(bytes_data)).format.lower()
             mime_type = f"image/{image_format}"
-        except Exception:
+        except Exception as e:
+            print(f"Error al detectar formato de imagen: {str(e)}")
             # Si falla, usar un tipo genérico
             mime_type = "image/jpeg"
 
@@ -336,6 +358,7 @@ def process_image_with_rest(api_key, image_data):
 
 
 # Función para extraer texto de diferentes formatos de respuesta OCR
+@catch_exceptions
 def extract_text_from_ocr_response(response):
     # Caso 1: Si hay páginas con markdown
     if "pages" in response and isinstance(response["pages"], list):
@@ -389,6 +412,7 @@ def extract_text_from_ocr_response(response):
 
 
 # Función recursiva para extraer todos los campos de texto de un diccionario anidado
+@catch_exceptions
 def extract_all_text_fields(data, prefix=""):
     result = []
 
@@ -413,6 +437,7 @@ def extract_all_text_fields(data, prefix=""):
 
 
 # Función para realizar solicitud OCR usando cURL
+@catch_exceptions
 def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
     # Crear un directorio temporal para los archivos
     temp_dir = tempfile.mkdtemp()
@@ -678,6 +703,7 @@ def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
 
 
 # Método alternativo usando Document Understanding
+@catch_exceptions
 def process_with_document_understanding(api_key, document):
     # Extraer URL del documento
     doc_url = document.get("document_url", "") or document.get("image_url", "")
@@ -695,7 +721,7 @@ def process_with_document_understanding(api_key, document):
         # Construir datos para chat completions
         doc_type = "document_url" if "document_url" in document else "image_url"
         request_data = {
-            "model": "mistral-large-latest",  # Modelo avanzado para comprensión de documentos
+            "model": "mistral-small-latest",  # Modelo avanzado para comprensión de documentos
             "messages": [
                 {
                     "role": "user",
@@ -773,6 +799,7 @@ def process_with_document_understanding(api_key, document):
 
 
 # Función para preparar una imagen para procesamiento
+@catch_exceptions
 def prepare_image_for_ocr(file_data):
     """
     Prepara una imagen para ser procesada con OCR, asegurando formato óptimo
@@ -804,6 +831,7 @@ def prepare_image_for_ocr(file_data):
 
 
 # Función para detección automática del tipo de documento
+@catch_exceptions
 def detect_document_type(file):
     """
     Detecta automáticamente si un archivo es un PDF o una imagen
@@ -845,6 +873,7 @@ def create_download_link(data, filetype, filename, button_class=""):
 
 
 # Función para procesar un documento automáticamente
+@catch_exceptions
 def process_document_auto(api_key, file, file_type):
     """
     Procesa un documento automáticamente eligiendo el método más adecuado
@@ -911,6 +940,7 @@ def process_document_auto(api_key, file, file_type):
 
 
 # Función para realizar post-procesamiento del texto extraído
+@catch_exceptions
 def post_process_text(text, method):
     """
     Realiza procesamiento adicional al texto extraído
@@ -931,8 +961,14 @@ def post_process_text(text, method):
 
 # Sidebar para configuración
 with st.sidebar:
-    st.image("https://mistral.ai/images/logo-dark.png", width=200)
     st.title("Configuración")
+
+    # Intentar mostrar el logo si está disponible en línea
+    try:
+        st.image("https://mistral.ai/images/logo.svg", width=200)
+    except:
+        # Si no se puede cargar la imagen, mostrar un título alternativo
+        st.markdown("# Mistral AI")
 
     # API Key (solo si no está disponible)
     if not api_key:
@@ -1028,28 +1064,21 @@ with st.sidebar:
     }
     st.session_state["config"]["post_processing"] = post_processing_map[post_processing]
 
+    # Información sobre la app (fuera de expander para evitar anidamiento)
     st.divider()
-
-    # Acerca de
-    with st.expander("ℹ️ Acerca de esta aplicación"):
-        st.markdown(
-            """
-        ### Mistral OCR App v3.0
-        
-        Esta aplicación permite extraer texto de documentos PDF e imágenes utilizando 
-        Mistral OCR, manteniendo la estructura y formato original.
-        
-        **Desarrollada por**: AI Team
-        
-        **Características principales**:
-        - Procesamiento automático de documentos
-        - Soporte para PDF e imágenes
-        - Post-procesamiento de texto extraído
-        - Interfaz intuitiva y amigable
-        
-        Para más información, visita [Mistral AI](https://mistral.ai).
+    st.subheader("ℹ️ Acerca de")
+    st.markdown(
         """
-        )
+    **Mistral OCR App v3.0**
+    
+    Esta aplicación permite extraer texto de documentos PDF e imágenes utilizando 
+    Mistral OCR, manteniendo la estructura y formato original.
+    
+    **Desarrollada por**: AI Team
+    
+    Para más información, visita [Mistral AI](https://mistral.ai).
+    """
+    )
 
 # Contenedor principal
 st.markdown('<h1 class="main-header">🔍 Mistral OCR App</h1>', unsafe_allow_html=True)
@@ -1058,7 +1087,7 @@ st.markdown(
     """
 <div class="info-box">
   📝 Esta aplicación extrae texto de documentos PDF e imágenes manteniendo su estructura original. 
-  Simplemente arrastra y suelta tus archivos en el área de carga y la IA hará el resto.
+  Simplemente sube tus archivos y la IA hará el resto.
 </div>
 """,
     unsafe_allow_html=True,
@@ -1067,13 +1096,22 @@ st.markdown(
 # Área principal para subir archivos
 st.markdown('<h2 class="sub-header">📤 Subir documentos</h2>', unsafe_allow_html=True)
 
-# Crear un área de carga de archivos atractiva
+# Mostrar instrucciones para la carga de archivos
+st.markdown(
+    """
+<div style="margin-bottom: 20px;">
+    <p>Selecciona tus documentos PDF o imágenes usando el botón de carga a continuación.</p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# Crear un control estándar de carga de archivos (sin drag & drop personalizado)
 uploaded_files = st.file_uploader(
-    "Arrastra y suelta tus documentos aquí",
+    "Seleccionar archivos",
     type=["pdf", "jpg", "jpeg", "png"],
     accept_multiple_files=True,
     help="Soporta archivos PDF, JPG, JPEG y PNG",
-    label_visibility="collapsed",
 )
 
 # Verificar si hay archivos subidos
@@ -1240,6 +1278,7 @@ if uploaded_files:
 
             for idx, tab in enumerate(tabs):
                 with tab:
+                    # Contenido del tab (sin usar expander para evitar anidamiento)
                     st.markdown('<div class="tab-content">', unsafe_allow_html=True)
 
                     # Dividir en columnas para vista previa y texto
@@ -1303,7 +1342,7 @@ if uploaded_files:
                             else:
                                 st.markdown(st.session_state["ocr_result"][idx])
 
-                                # Botones de descarga mejorados
+                                # Botones de descarga mejorados (sin estar dentro de un expander)
                                 st.markdown(
                                     '<h4 style="margin-top: 2rem; margin-bottom: 1rem;">Descargar resultados</h4>',
                                     unsafe_allow_html=True,
@@ -1359,7 +1398,7 @@ if uploaded_files:
                                         unsafe_allow_html=True,
                                     )
 
-                                # Opciones de post-procesamiento
+                                # Opciones de post-procesamiento (fuera de expander)
                                 st.markdown(
                                     '<h4 style="margin-top: 2rem; margin-bottom: 1rem;">Acciones adicionales</h4>',
                                     unsafe_allow_html=True,
@@ -1397,7 +1436,7 @@ if uploaded_files:
                                         ] = processed_text
                                         st.rerun()
 
-                                # Campo para chatear con el documento
+                                # Campo para chatear con el documento (fuera de expander)
                                 st.markdown(
                                     '<h4 style="margin-top: 2rem; margin-bottom: 0.5rem;">Preguntar sobre el documento</h4>',
                                     unsafe_allow_html=True,
@@ -1411,15 +1450,8 @@ if uploaded_files:
                                 )
 
                                 if query:
-                                    st.markdown(
-                                        f"""
-                                    <div class="info-box">
-                                        <strong>Pregunta:</strong> {query}<br>
-                                        <strong>Respuesta:</strong> Esta es una respuesta simulada a tu pregunta sobre el documento.
-                                        La respuesta real requeriría integración con un modelo de IA adicional para analizar el contenido.
-                                    </div>
-                                    """,
-                                        unsafe_allow_html=True,
+                                    st.info(
+                                        f"**Pregunta:** {query}\n\n**Respuesta:** Esta es una respuesta simulada a tu pregunta sobre el documento. La respuesta real requeriría integración con un modelo de IA adicional para analizar el contenido."
                                     )
                         else:
                             st.error(
@@ -1429,15 +1461,8 @@ if uploaded_files:
                     st.markdown("</div>", unsafe_allow_html=True)
 else:
     # Instrucciones visuales cuando no hay archivos
-    st.markdown(
-        """
-    <div class="file-uploader">
-        <h3>Arrastra y suelta tus documentos aquí</h3>
-        <p>Formatos soportados: PDF, JPG, JPEG, PNG</p>
-        <p>✨ Los documentos se procesarán automáticamente</p>
-    </div>
-    """,
-        unsafe_allow_html=True,
+    st.info(
+        "👆 Selecciona tus archivos PDF o imágenes para extraer el texto con OCR. La aplicación detectará automáticamente el tipo de documento y utilizará el método más adecuado."
     )
 
 # Pie de página
