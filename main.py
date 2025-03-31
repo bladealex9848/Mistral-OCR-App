@@ -965,10 +965,32 @@ with st.sidebar:
 
     # Intentar mostrar el logo si está disponible en línea
     try:
-        st.image("https://mistral.ai/images/logo.svg", width=200)
+        st.image("https://mistral.ai/_next/image?url=%2Fimg%2FM-beige.svg&w=640&q=75", width=200)
     except:
-        # Si no se puede cargar la imagen, mostrar un título alternativo
-        st.markdown("# Mistral AI")
+        # Si no se puede cargar la imagen, intentar mostrar un ícono SVG
+        try:
+            st.markdown(
+                """
+                <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2" width="200">
+                    <path d="M189.08 303.228H94.587l.044-94.446h94.497l-.048 94.446z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M283.528 397.674h-94.493l.044-94.446h94.496l-.047 94.446z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M283.575 303.228H189.08l.046-94.446h94.496l-.047 94.446z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M378.07 303.228h-94.495l.044-94.446h94.498l-.047 94.446z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M189.128 208.779H94.633l.044-94.448h94.498l-.047 94.448z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M378.115 208.779h-94.494l.045-94.448h94.496l-.047 94.448z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M94.587 303.227H.093l.044-96.017h94.496l-.046 96.017z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M94.633 208.779H.138l.046-94.448H94.68l-.047 94.448z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M94.68 115.902H.185L.23 19.885h94.498l-.047 96.017zM472.657 114.331h-94.495l.044-94.446h94.497l-.046 94.446zM94.54 399.244H.046l.044-97.588h94.497l-.047 97.588z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M94.495 492.123H0l.044-94.446H94.54l-.045 94.446zM472.563 303.228H378.07l.044-94.446h94.496l-.047 94.446zM472.61 208.779h-94.495l.044-94.448h94.498l-.047 94.448z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M472.517 397.674h-94.494l.044-94.446h94.497l-.047 94.446z" fill="#1c1c1b" fill-rule="nonzero"/>
+                    <path d="M472.47 492.121h-94.493l.044-96.017h94.496l-.047 96.017z" fill="#1c1c1b" fill-rule="nonzero"/>
+                </svg>
+                """,
+                unsafe_allow_html=True,
+            )
+        except:
+            # Si no se puede cargar el ícono SVG, mostrar un título alternativo
+            st.markdown("# Mistral AI")
 
     # API Key (solo si no está disponible)
     if not api_key:
