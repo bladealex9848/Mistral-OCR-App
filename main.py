@@ -7,6 +7,9 @@ import subprocess
 import tempfile
 import requests
 from pathlib import Path
+import io
+import mimetypes
+from PIL import Image
 
 # Configuración de la página
 st.set_page_config(layout="wide", page_title="Aplicación Mistral OCR", page_icon="🔍")
@@ -140,8 +143,143 @@ def validate_api_key(api_key):
         return False, f"Error de conexión: {str(e)}"
 
 
+# Función para procesar imagen utilizando API REST directamente (más confiable para imágenes)
+def process_image_with_rest(api_key, image_data):
+    st.text("Procesando imagen con REST API directa...")
+
+    # Obtener un mime type adecuado para la imagen
+    try:
+        # Si image_data es un archivo subido, convertirlo a bytes
+        if hasattr(image_data, "read"):
+            bytes_data = image_data.read()
+            image_data.seek(0)  # Reset file pointer
+        else:
+            # Si ya es bytes, usarlo directamente
+            bytes_data = image_data
+
+        # Intentar detectar el tipo MIME de la imagen
+        image_format = Image.open(io.BytesIO(bytes_data)).format.lower()
+        mime_type = f"image/{image_format}"
+    except Exception:
+        # Si falla, usar un tipo genérico
+        mime_type = "image/jpeg"
+
+    # Codificar la imagen a base64
+    encoded_image = base64.b64encode(bytes_data).decode("utf-8")
+    image_url = f"data:{mime_type};base64,{encoded_image}"
+
+    # Preparar los datos para la solicitud
+    payload = {
+        "model": "mistral-ocr-latest",
+        "document": {"type": "image_url", "image_url": image_url},
+    }
+
+    # Configurar los headers
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+
+    try:
+        # Hacer la solicitud a la API de Mistral
+        response = requests.post(
+            "https://api.mistral.ai/v1/ocr", json=payload, headers=headers
+        )
+
+        # Revisar si la respuesta fue exitosa
+        if response.status_code == 200:
+            result = response.json()
+            st.success("Imagen procesada correctamente con API REST")
+            return extract_text_from_ocr_response(result)
+        else:
+            error_message = (
+                f"Error en API OCR ({response.status_code}): {response.text}"
+            )
+            st.error(error_message)
+            return {"error": error_message}
+
+    except Exception as e:
+        error_message = f"Error al procesar imagen: {str(e)}"
+        st.error(error_message)
+        return {"error": error_message}
+
+
+# Función para extraer texto de diferentes formatos de respuesta OCR
+def extract_text_from_ocr_response(response):
+    # Caso 1: Si hay páginas con markdown
+    if "pages" in response and isinstance(response["pages"], list):
+        pages = response["pages"]
+        if pages and "markdown" in pages[0]:
+            markdown_text = "\n\n".join(page.get("markdown", "") for page in pages)
+            if markdown_text.strip():
+                return {"text": markdown_text, "format": "markdown"}
+
+    # Caso 2: Si hay un texto plano en la respuesta
+    if "text" in response:
+        return {"text": response["text"], "format": "text"}
+
+    # Caso 3: Si hay elementos (para formatos más estructurados)
+    if "elements" in response:
+        elements = response["elements"]
+        if isinstance(elements, list):
+            text_parts = []
+            for element in elements:
+                if "text" in element:
+                    text_parts.append(element["text"])
+            return {"text": "\n".join(text_parts), "format": "elements"}
+
+    # Caso 4: Si hay un campo 'content' principal
+    if "content" in response:
+        return {"text": response["content"], "format": "content"}
+
+    # Caso 5: Si no se encuentra texto en el formato esperado, intentar examinar toda la respuesta
+    try:
+        response_str = json.dumps(response, indent=2)
+        # Si la respuesta es muy grande, devolver un mensaje informativo
+        if len(response_str) > 5000:
+            return {
+                "text": "La respuesta OCR contiene datos pero no en el formato esperado. Revisa los detalles técnicos para más información.",
+                "format": "unknown",
+                "raw_response": response,
+            }
+
+        # Intentar extraer cualquier texto encontrado en la respuesta
+        extracted_text = extract_all_text_fields(response)
+        if extracted_text:
+            return {"text": extracted_text, "format": "extracted"}
+
+        return {
+            "text": "No se pudo encontrar texto en la respuesta OCR. Revisa los detalles técnicos.",
+            "format": "unknown",
+            "raw_response": response,
+        }
+    except Exception as e:
+        return {"error": f"Error al procesar la respuesta: {str(e)}"}
+
+
+# Función recursiva para extraer todos los campos de texto de un diccionario anidado
+def extract_all_text_fields(data, prefix=""):
+    result = []
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            new_prefix = f"{prefix}.{key}" if prefix else key
+
+            if isinstance(value, str) and len(value) > 1:
+                result.append(f"{new_prefix}: {value}")
+            elif isinstance(value, (dict, list)):
+                result.extend(extract_all_text_fields(value, new_prefix))
+
+    elif isinstance(data, list):
+        for i, item in enumerate(data):
+            new_prefix = f"{prefix}[{i}]"
+            if isinstance(item, (dict, list)):
+                result.extend(extract_all_text_fields(item, new_prefix))
+            elif isinstance(item, str) and len(item) > 1:
+                result.append(f"{new_prefix}: {item}")
+
+    return "\n".join(result)
+
+
 # Función para realizar solicitud OCR usando cURL
-def process_ocr_with_curl(api_key, document, method="REST"):
+def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
     # Crear un directorio temporal para los archivos
     temp_dir = tempfile.mkdtemp()
 
@@ -217,63 +355,25 @@ def process_ocr_with_curl(api_key, document, method="REST"):
                         "error": f"Error al parsear respuesta del servidor: {result.stdout}"
                     }
 
-            # En este punto, document tiene una URL válida para procesar
-
         elif document.get("type") == "image_url":
-            # Para imágenes, similar proceso pero con tipo image_url
+            # Para imágenes, procesar directamente con la API REST
             url = document["image_url"]
             if url.startswith("data:"):
-                # Es una imagen en base64, la guardamos
-                mime_type = url.split(";")[0].split(":")[1]
-                extension = mime_type.split("/")[1]
-                base64_data = (
-                    url.split(",")[1] if "," in url else url.split(";base64,")[1]
-                )
-
-                temp_img_path = os.path.join(temp_dir, f"temp_image.{extension}")
-                with open(temp_img_path, "wb") as f:
-                    f.write(base64.b64decode(base64_data))
-
-                # Crear un JSON para la solicitud
-                json_data = {
-                    "model": "mistral-ocr-latest",
-                    "document": {
-                        "type": "image_url",
-                        "image_url": f"file://{temp_img_path}",
-                    },
-                    "include_image_base64": True,
-                }
-
-                # Crea un archivo temporal con el JSON
-                temp_json_path = os.path.join(temp_dir, "request.json")
-                with open(temp_json_path, "w") as f:
-                    json.dump(json_data, f)
-
-                # Comando cURL
-                ocr_command = [
-                    "curl",
-                    "https://api.mistral.ai/v1/ocr",
-                    "-H",
-                    "Content-Type: application/json",
-                    "-H",
-                    f"Authorization: Bearer {api_key}",
-                    "-d",
-                    f"@{temp_json_path}",
-                ]
-
-                # Ejecutar y capturar
-                st.text("Ejecutando OCR para imagen...")
-                ocr_result = subprocess.run(ocr_command, capture_output=True, text=True)
-
-                if ocr_result.returncode != 0:
-                    return {"error": f"Error en OCR: {ocr_result.stderr}"}
-
+                # Es una imagen en base64
                 try:
-                    return json.loads(ocr_result.stdout)
-                except json.JSONDecodeError:
-                    return {
-                        "error": f"Error al parsear respuesta OCR: {ocr_result.stdout}"
-                    }
+                    # Extraer los datos de la imagen
+                    if "," in url:
+                        base64_data = url.split(",")[1]
+                    else:
+                        base64_data = url.split(";base64,")[1]
+
+                    # Decodificar la imagen
+                    image_data = base64.b64decode(base64_data)
+
+                    # Usar la función específica para imágenes
+                    return process_image_with_rest(api_key, image_data)
+                except Exception as e:
+                    return {"error": f"Error al procesar imagen base64: {str(e)}"}
 
         # Preparar datos para la solicitud OCR
         json_data = {
@@ -301,7 +401,8 @@ def process_ocr_with_curl(api_key, document, method="REST"):
 
         # Ejecutar OCR
         st.text("Ejecutando OCR con cURL...")
-        st.code(" ".join(ocr_command).replace(api_key, "****"), language="bash")
+        if show_debug:
+            st.code(" ".join(ocr_command).replace(api_key, "****"), language="bash")
 
         ocr_result = subprocess.run(ocr_command, capture_output=True, text=True)
 
@@ -320,7 +421,8 @@ def process_ocr_with_curl(api_key, document, method="REST"):
             or "not found" in ocr_result.stdout.lower()
         ):
             st.warning("La API respondió, pero con un error")
-            st.code(ocr_result.stdout, language="json")
+            if show_debug:
+                st.code(ocr_result.stdout, language="json")
 
             # Intentar método alternativo
             if "document understanding" not in method.lower():
@@ -328,10 +430,38 @@ def process_ocr_with_curl(api_key, document, method="REST"):
                 return process_with_document_understanding(api_key, document)
 
         try:
-            return json.loads(ocr_result.stdout)
+            # Intentar parsear la respuesta JSON
+            response_json = json.loads(ocr_result.stdout)
+
+            # Extraer el texto de la respuesta
+            extraction_result = extract_text_from_ocr_response(response_json)
+
+            if "error" in extraction_result:
+                return extraction_result
+
+            if show_debug and "raw_response" in extraction_result:
+                st.subheader("Respuesta completa de la API")
+                st.json(extraction_result["raw_response"])
+
+            if "text" in extraction_result:
+                return {"pages": [{"markdown": extraction_result["text"]}]}
+            else:
+                return response_json
+
         except json.JSONDecodeError:
             if not ocr_result.stdout:
                 return {"error": "Respuesta vacía del servidor"}
+
+            # Si la respuesta no es JSON, podría ser texto plano
+            if (
+                ocr_result.stdout.strip()
+                and len(ocr_result.stdout) < 1000
+                and not ocr_result.stdout.startswith("{")
+                and not ocr_result.stdout.startswith("[")
+            ):
+                # Podría ser texto plano, devolverlo como resultado
+                return {"pages": [{"markdown": ocr_result.stdout}]}
+
             return {
                 "error": f"Error al parsear respuesta OCR: {ocr_result.stdout[:200]}..."
             }
@@ -424,6 +554,37 @@ def process_with_document_understanding(api_key, document):
             }
     except json.JSONDecodeError:
         return {"error": f"Error al parsear respuesta: {du_result.stdout[:200]}..."}
+
+
+# Función para preparar una imagen para procesamiento
+def prepare_image_for_ocr(file_data):
+    """
+    Prepara una imagen para ser procesada con OCR, asegurando formato óptimo
+    """
+    try:
+        # Abrir la imagen con PIL para procesamiento
+        img = Image.open(io.BytesIO(file_data))
+
+        # Determinar el mejor formato para salida
+        save_format = "JPEG" if img.mode == "RGB" else "PNG"
+
+        # Crear un buffer para guardar la imagen optimizada
+        buffer = io.BytesIO()
+
+        # Guardar la imagen en el buffer con el formato seleccionado
+        if save_format == "JPEG":
+            img.save(buffer, format="JPEG", quality=95)
+        else:
+            img.save(buffer, format="PNG")
+
+        # Devolver los datos optimizados
+        buffer.seek(0)
+        return buffer.read(), f"image/{save_format.lower()}"
+
+    except Exception as e:
+        # Si hay cualquier error, devolver los datos originales
+        st.warning(f"No se pudo optimizar la imagen: {str(e)}")
+        return file_data, "image/jpeg"  # Formato por defecto
 
 
 # Obtener la API key
@@ -536,21 +697,20 @@ with st.expander("⚙️ Opciones avanzadas"):
         help="Muestra información técnica detallada durante el procesamiento",
     )
 
-    # Opciones de depuración cURL
-    if show_technical_details:
-        st.markdown("#### Opciones de cURL")
-        curl_verbose = st.checkbox(
-            "Modo verboso de cURL",
-            help="Muestra información detallada de las peticiones cURL",
-        )
+    optimize_images = st.checkbox(
+        "Optimizar imágenes",
+        value=True,
+        help="Optimiza las imágenes antes de enviarlas para OCR (recomendado)",
+    )
 
-        timeout = st.slider(
-            "Tiempo de espera (segundos)",
-            min_value=30,
-            max_value=300,
-            value=120,
-            step=30,
-            help="Tiempo máximo de espera para las peticiones",
+    # Opciones específicas para imágenes
+    if file_type == "Imagen":
+        st.markdown("#### Opciones de imagen")
+
+        direct_api_for_images = st.checkbox(
+            "Usar API REST directa para imágenes",
+            value=True,
+            help="Usa la API REST directamente para procesar imágenes (más confiable)",
         )
 
 # Información sobre la API
@@ -640,37 +800,73 @@ if process_button:
                                 preview_src = source.strip()
                                 file_name = source.split("/")[-1]
                             else:
+                                # Leer los bytes de la imagen
                                 file_bytes = source.read()
-                                mime_type = source.type
+
+                                # Optimizar la imagen si está habilitado
+                                if optimize_images:
+                                    file_bytes, mime_type = prepare_image_for_ocr(
+                                        file_bytes
+                                    )
+                                else:
+                                    mime_type = source.type
+
+                                # Guardar los bytes originales o optimizados para vista previa
+                                st.session_state["image_bytes"].append(file_bytes)
+
+                                # Codificar en base64 para enviar a la API
                                 encoded_image = base64.b64encode(file_bytes).decode(
                                     "utf-8"
                                 )
+
+                                # Preparar el documento con la imagen
                                 document = {
                                     "type": "image_url",
                                     "image_url": f"data:{mime_type};base64,{encoded_image}",
                                 }
                                 preview_src = f"data:{mime_type};base64,{encoded_image}"
-                                st.session_state["image_bytes"].append(file_bytes)
                                 file_name = source.name
+
                                 # Reiniciar el cursor del archivo para futuras operaciones
                                 source.seek(0)
 
-                        # Llamar a la API de OCR con método seleccionado
+                        # Llamar a la API de OCR
                         st.text(f"Enviando documento {file_name} para procesamiento...")
 
-                        # Determinar el método a usar basado en la selección
-                        if processing_method == "OCR API (Standard)":
-                            ocr_response = process_ocr_with_curl(
-                                api_key_input, document, method="OCR"
+                        # Si es una imagen y está habilitada la API REST directa, usar ese método
+                        if (
+                            file_type == "Imagen"
+                            and direct_api_for_images
+                            and source_type == "Archivo local"
+                        ):
+                            ocr_response = process_image_with_rest(
+                                api_key_input, file_bytes
                             )
-                        elif processing_method == "Document Understanding API":
-                            ocr_response = process_with_document_understanding(
-                                api_key_input, document
-                            )
-                        else:  # Auto
-                            ocr_response = process_ocr_with_curl(
-                                api_key_input, document, method="Auto"
-                            )
+                            # Convertir la respuesta al formato esperado por el resto del código
+                            if "text" in ocr_response:
+                                ocr_response = {
+                                    "pages": [{"markdown": ocr_response["text"]}]
+                                }
+                        else:
+                            # Determinar el método a usar basado en la selección
+                            if processing_method == "OCR API (Standard)":
+                                ocr_response = process_ocr_with_curl(
+                                    api_key_input,
+                                    document,
+                                    method="OCR",
+                                    show_debug=show_technical_details,
+                                )
+                            elif processing_method == "Document Understanding API":
+                                ocr_response = process_with_document_understanding(
+                                    api_key_input, document
+                                )
+                            else:  # Auto
+                                ocr_response = process_ocr_with_curl(
+                                    api_key_input,
+                                    document,
+                                    method="Auto",
+                                    show_debug=show_technical_details,
+                                )
 
                         # Procesar la respuesta
                         if "error" in ocr_response:
@@ -894,17 +1090,18 @@ with st.expander("🔧 Solución de problemas"):
         """
     Si encuentras problemas al usar esta aplicación, intenta lo siguiente:
     
-    1. **Error 404 (Not Found)**: 
+    1. **Error al procesar imágenes**: 
+       - Asegúrate de que la imagen tenga buen contraste y resolución
+       - Activa la opción "Optimizar imágenes" en las opciones avanzadas
+       - Usa "API REST directa para imágenes" en las opciones avanzadas
+       
+    2. **Error 404 (Not Found)**: 
        - Verifica que tengas acceso a la API de OCR en tu plan de Mistral
        - Prueba con el método alternativo "Document Understanding API"
        
-    2. **Error de API key**: 
+    3. **Error de API key**: 
        - Verifica que tu API key de Mistral sea válida y esté correctamente introducida
        - Asegúrate de que la API key tenga permisos suficientes
-       
-    3. **Error de conexión**: 
-       - Asegúrate de tener una conexión a Internet estable
-       - Verifica que no haya restricciones de firewall
        
     4. **Error de formato**: 
        - Asegúrate de que tus archivos sean compatibles (PDF, JPG, PNG)
@@ -913,9 +1110,6 @@ with st.expander("🔧 Solución de problemas"):
     5. **Error de tamaño**: 
        - Los archivos no deben exceder 50 MB
        - Intenta dividir documentos grandes
-       
-    6. **Límites de API**: 
-       - Si recibes errores de límite excedido, espera unos minutos e intenta nuevamente
     
     Para más información, consulta la [documentación oficial de Mistral AI](https://docs.mistral.ai).
     """
@@ -926,7 +1120,7 @@ with st.expander("🛠️ Método curl vs REST API"):
         """
     ### Comparación de métodos de procesamiento:
     
-    Esta aplicación implementa dos métodos principales para procesar documentos:
+    Esta aplicación implementa varios métodos para procesar documentos:
     
     #### 1. OCR API (mediante cURL)
     - Llamada directa al endpoint de OCR de Mistral
@@ -934,7 +1128,13 @@ with st.expander("🛠️ Método curl vs REST API"):
     - Mejor manejo de archivos grandes
     - Proporciona información detallada de errores
     
-    #### 2. Document Understanding API
+    #### 2. API REST directa para imágenes
+    - Método optimizado específicamente para imágenes
+    - Preparación correcta de formato MIME y codificación
+    - Mejor rendimiento y precisión para imágenes
+    - Manejo especial de respuestas para extracción de texto
+    
+    #### 3. Document Understanding API
     - Utiliza el modelo de chat para extraer texto
     - Puede funcionar incluso si el OCR directo no está disponible en tu plan
     - Más lento pero potencialmente más flexible
@@ -949,7 +1149,7 @@ st.markdown("---")
 st.markdown(
     """
 <div style="text-align: center; color: #666;">
-    <p>Mistral OCR App v2.0 | Desarrollada con Streamlit, Mistral AI API y cURL</p>
+    <p>Mistral OCR App v3.0 | Desarrollada con Streamlit, Mistral AI API y procesamiento avanzado de imágenes</p>
 </div>
 """,
     unsafe_allow_html=True,
