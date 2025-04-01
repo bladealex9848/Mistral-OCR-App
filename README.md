@@ -1,139 +1,165 @@
 # Mistral OCR App
 
-The **Mistral OCR App** is a Streamlit-based web application that leverages the [Mistral OCR API](https://docs.mistralai.com/) to extract text from both PDF documents and images. Users can either provide a URL or upload a local file. The app displays the original document (or image) in a preview alongside the extracted OCR results and offers a seamless download option—all without refreshing the page.
+La **Mistral OCR App** es una aplicación web basada en Streamlit que utiliza la [API OCR de Mistral](https://docs.mistral.ai/reference/) para extraer texto de documentos PDF e imágenes. Los usuarios pueden proporcionar una URL o cargar un archivo local. La aplicación detecta automáticamente el tipo de archivo, muestra el documento original (o imagen) en una vista previa junto con los resultados OCR extraídos y ofrece una opción de descarga sencilla, todo sin necesidad de recargar la página.
 
-### 🚀 Try the Mistral OCR App Live!  
+### 🚀 ¡Prueba la Mistral OCR App en vivo!
 
-🔗 **Live Demo:** [Mistral OCR App](https://mistralocrai.streamlit.app/)  
+🔗 **Demo en vivo:** [Mistral OCR App](https://mistral-ocr-app.streamlit.app/)
 
-Experience the power of **Mistral OCR** in action! Upload PDFs or images and extract text seamlessly with this interactive **Streamlit-based OCR app**.  
+¡Experimenta el poder de **Mistral OCR** en acción! Carga PDFs o imágenes y extrae texto sin problemas con esta **aplicación OCR interactiva basada en Streamlit**.
 
 ![Mistral OCR App Demo](demo.png)
 
+## Características
 
-## Features
+- **Detección Automática del Tipo de Archivo:** La aplicación identifica automáticamente si el archivo cargado es un PDF o una imagen.
+- **Múltiples Métodos de Entrada:** Elige entre la entrada de URL o la carga de archivos locales.
+- **Vista Previa en Tiempo Real:** Muestra el archivo original (a través de un iframe para PDFs o usando `st.image` para imágenes).
+- **Extracción OCR:** Obtén los resultados OCR presentados en un diseño limpio de dos columnas.
+- **Resultados Descargables:** Descarga la salida OCR en formato JSON, TXT o Markdown.
+- **Opciones de Procesamiento Avanzadas:** Ofrece diferentes métodos de procesamiento (API OCR Estándar, API Document Understanding, Auto) y optimización de imágenes.
+- **Interfaz Interactiva:** Construida con Streamlit para una experiencia de usuario fluida e interactiva.
 
-- **Dual File Support:** Process both PDFs and images.
-- **Multiple Input Methods:** Choose between URL input or local file uploads.
-- **Real-Time Preview:** Display the original file (via an iframe for PDFs or using `st.image` for images).
-- **OCR Extraction:** Get OCR results presented in a clean, two-column layout.
-- **Downloadable Results:** Download the OCR output with a custom HTML link that avoids a full page refresh.
-- **Interactive Interface:** Built with Streamlit for a smooth and interactive user experience.
+## Instalación
 
-## Installation
+### Requisitos Previos
 
-### Prerequisites
-
-- Python 3.7 or later
+- Python 3.8 o superior (recomendado)
 - [Streamlit](https://streamlit.io/)
-- [Mistralai Python Client](https://pypi.org/project/mistralai/)
+- [Pillow](https://pypi.org/project/Pillow/)
+- [Requests](https://pypi.org/project/requests/)
+- [python-dotenv](https://pypi.org/project/python-dotenv/)
+- [opencv-python-headless](https://pypi.org/project/opencv-python-headless/)
 
-### Steps
+### Pasos
 
-1. **Clone the Repository:**
+1. **Clona el Repositorio de origen:**
 
    ```bash
-   git clone https://github.com/AIAnytime/Mistral-OCR-App.git
+   git clone [https://github.com/AIAnytime/Mistral-OCR-App.git](https://github.com/AIAnytime/Mistral-OCR-App.git)
    cd Mistral-OCR-App
    ```
 
-2. **Create and Activate a Virtual Environment (Optional but Recommended):**
+2. **Crea y Activa un Entorno Virtual (Opcional pero Recomendado):**
 
-   On macOS/Linux:
+   En macOS/Linux:
    ```bash
    python -m venv venv
    source venv/bin/activate
    ```
 
-   On Windows:
+   En Windows:
    ```bash
    python -m venv venv
    venv\Scripts\activate
    ```
 
-3. **Install Required Dependencies:**
+3. **Instala las Dependencias Requeridas:**
 
-   Create a `requirements.txt` file (if not already present) with:
+   Asegúrate de tener un archivo `requirements.txt` con el siguiente contenido:
+
    ```plaintext
-   streamlit
-   mistralai
+   streamlit>=1.32.0
+   pillow>=10.0.0
+   requests>=2.31.0
+   python-dotenv>=1.0.1
+   opencv-python-headless>=4.9.0.80
    ```
 
-   Then install them:
+   Luego, instálalas:
+
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Set Up Your Mistral API Key:**
+4. **Configura tu Clave de API de Mistral:**
 
-   The app requires a Mistral API key. Export your API key as an environment variable:
+   La aplicación requiere una clave de API de Mistral. Puedes configurarla de una de las siguientes maneras (orden de prioridad):
 
-   - On macOS/Linux:
-     ```bash
-     export MISTRAL_API_KEY=your_api_key_here
+   - **Secretos de Streamlit:** Crea un archivo `.streamlit/secrets.toml` en el directorio de tu proyecto (o en el directorio desde donde ejecutas la aplicación) y agrega:
+
+     ```toml
+     MISTRAL_API_KEY = "tu_clave_api_aqui"
      ```
 
-   - On Windows (Command Prompt):
-     ```bash
-     set MISTRAL_API_KEY=your_api_key_here
-     ```
+   - **Variable de Entorno:** Exporta tu clave de API como una variable de entorno:
 
-## Usage
+     - En macOS/Linux:
+       ```bash
+       export MISTRAL_API_KEY=tu_clave_api_aqui
+       ```
 
-To run the app, use the following command:
+     - En Windows (Símbolo del sistema):
+       ```bash
+       set MISTRAL_API_KEY=tu_clave_api_aqui
+       ```
+
+## Uso
+
+Para ejecutar la aplicación, utiliza el siguiente comando:
 
 ```bash
 streamlit run main.py
 ```
 
-### How It Works
+### Cómo Funciona
 
-1. **API Key Entry:**  
-   When you launch the app, you'll be prompted to enter your Mistral API key.
+1. **Configuración de la Clave de API:**
+   Asegúrate de que tu clave de API de Mistral esté configurada como se describe en la sección de Instalación.
 
-2. **File Type & Source Selection:**  
-   Choose whether you want to process a **PDF** or an **Image** and select the source type—either via a URL or by uploading a file.
+2. **Selección de la Fuente:**
+   Elige si deseas procesar un documento a través de una **URL** o cargando un **Archivo local**.
 
-3. **Processing:**  
-   Click the **Process** button to send the document to the Mistral OCR API. The app then:
-   - Displays a preview of the document in the left column.
-   - Shows the extracted OCR results in the right column.
-   - Provides a download link for the OCR output.
+3. **Entrada del Documento:**
+   - Si seleccionaste **URL**, introduce la URL del archivo PDF o de imagen.
+   - Si seleccionaste **Archivo local**, carga tu archivo PDF o de imagen. La aplicación detectará automáticamente el tipo de archivo.
 
-4. **Download:**  
-   Click the download link to save the OCR result as a text file without refreshing the page.
+4. **Procesamiento:**
+   Haz clic en el botón **Procesar documentos** para enviar el documento a la API OCR de Mistral. La aplicación entonces:
+   - Muestra una vista previa del documento en la columna izquierda.
+   - Muestra los resultados OCR extraídos en la columna derecha.
+   - Proporciona enlaces de descarga para la salida OCR en formatos JSON, TXT y Markdown.
 
-## Code Overview
+5. **Descarga:**
+   Haz clic en el botón de descarga deseado para guardar el resultado OCR en tu computadora.
 
-- **main.py:**  
-  The main Streamlit application file that contains the logic for:
-  - User input handling (API key, file type, source type)
-  - Document preparation (base64 encoding for local uploads)
-  - Calling the Mistral OCR API
-  - Displaying the preview and OCR results
-  - Providing a custom download link
+## Descripción del Código
 
-- **README.md:**  
-  This file, which provides detailed instructions and documentation for the project.
+- **main.py:**
+  El archivo principal de la aplicación Streamlit que contiene la lógica para:
+  - Elementos de la interfaz de usuario para la entrada de la clave de API, la selección de la fuente (URL o carga de archivos).
+  - Detección automática del tipo de archivo cargado (PDF o imagen).
+  - Preparación del documento (lectura de bytes del archivo, codificación a base64 si es necesario).
+  - Llamada a la API OCR de Mistral utilizando `requests` y `subprocess` (con cURL para mayor robustez).
+  - Manejo de diferentes métodos de procesamiento de la API (OCR Estándar, Document Understanding).
+  - Mostrar la vista previa del documento utilizando los elementos apropiados de Streamlit (`st.iframe` para PDFs, `st.image` para imágenes).
+  - Presentar los resultados OCR extraídos en un `st.text_area`.
+  - Generar enlaces de descarga para la salida OCR en varios formatos (JSON, TXT, MD).
+  - Proporcionar opciones avanzadas como la optimización de imágenes y la visualización de detalles técnicos.
 
-- **requirements.txt:**  
-  A list of the required Python packages.
+- **README.md:**
+  Este archivo, que proporciona instrucciones detalladas y documentación para el proyecto.
 
-## Contributing
+- **requirements.txt:**
+  Una lista de los paquetes de Python requeridos con versiones específicas para garantizar la consistencia.
 
-Contributions are welcome! If you have suggestions or find issues, please feel free to:
-- Open an issue in the repository.
-- Submit a pull request with improvements or bug fixes.
+## Contribuciones
 
-## License
+¡Las contribuciones son bienvenidas! Si tienes sugerencias o encuentras problemas, no dudes en:
 
-This project is licensed under the [MIT License](LICENSE).
+- Abrir un problema en el repositorio.
+- Enviar una solicitud de extracción con mejoras o correcciones de errores.
 
-## Acknowledgements
+## Licencia
 
-- [Streamlit](https://streamlit.io/) for making interactive web app development easy.
-- [Mistralai](https://github.com/mistralai) for their powerful OCR API and Python client.
+Este proyecto está licenciado bajo la [Licencia MIT](LICENSE).
 
-## Contact
+## Agradecimientos
 
-For any questions or support, please open an issue in this repository or contact [sonu@aianytime.net].
+- [Streamlit](https://streamlit.io/) por facilitar el desarrollo de aplicaciones web interactivas.
+- [Mistral AI](https://mistral.ai) por su potente API OCR.
+- Los desarrolladores de las bibliotecas de Python utilizadas en este proyecto.
+
+## Contacto
+
+Para cualquier pregunta o soporte, abre un problema en este repositorio o contacta a [sonu@aianytime.net].
