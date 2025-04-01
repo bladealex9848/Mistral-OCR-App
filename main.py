@@ -10,8 +10,6 @@ from pathlib import Path
 import io
 import mimetypes
 from PIL import Image
-import uuid
-import re
 
 # Configuración de la página
 st.set_page_config(layout="wide", page_title="Aplicación Mistral OCR", page_icon="🔍")
@@ -86,44 +84,27 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
-# Configurar un manejo de errores global
-def catch_exceptions(func):
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            error_msg = f"Error en {func.__name__}: {str(e)}"
-            st.error(error_msg)
-            st.code(traceback.format_exc(), language="python")
-            print(f"ERROR: {error_msg}")
-            traceback.print_exc()
-            return None
-
-    return wrapper
-
-
-# Inicializar parámetros de configuración en session_state
-if "config" not in st.session_state:
-    st.session_state["config"] = {
-        "show_technical_details": False,
-        "optimize_images": True,
-        "direct_api_for_images": True,
-        "process_on_upload": True,
-        "post_processing": "none",
-    }
-
-# Inicializar variables de estado de sesión para persistencia
-if "ocr_result" not in st.session_state:
-    st.session_state["ocr_result"] = []
-if "preview_src" not in st.session_state:
-    st.session_state["preview_src"] = []
-if "image_bytes" not in st.session_state:
-    st.session_state["image_bytes"] = []
-if "file_names" not in st.session_state:
-    st.session_state["file_names"] = []
-if "processing_method" not in st.session_state:
-    st.session_state["processing_method"] = "Auto"
+with st.expander("🔍 Información sobre esta aplicación"):
+    st.markdown(
+        """
+    Esta aplicación permite extraer información de documentos PDF e imágenes utilizando Mistral OCR.
+    
+    ### Características:
+    - Procesa documentos PDF e imágenes
+    - Soporta carga desde URL o archivos locales
+    - Extrae texto manteniendo el formato del documento
+    - Descarga los resultados en múltiples formatos
+    - Implementa métodos de respaldo para máxima confiabilidad
+    
+    ### Cómo usar:
+    1. Proporciona tu API key de Mistral
+    2. Selecciona el tipo de archivo (PDF o imagen)
+    3. Elige el método de carga (URL o archivo local)
+    4. Sube tus documentos o proporciona URLs
+    5. Haz clic en "Procesar"
+    6. Visualiza y descarga los resultados
+    """
+    )
 
 
 # Función para obtener la API key de diferentes fuentes
@@ -164,8 +145,7 @@ def validate_api_key(api_key):
 
 # Función para procesar imagen utilizando API REST directamente (más confiable para imágenes)
 def process_image_with_rest(api_key, image_data):
-    with st.status("Procesando imagen con REST API...", expanded=True) as status:
-        status.update(label="Preparando imagen...", state="running")
+    st.text("Procesando imagen con REST API directa...")
 
     # Obtener un mime type adecuado para la imagen
     try:
@@ -197,32 +177,28 @@ def process_image_with_rest(api_key, image_data):
     # Configurar los headers
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
 
-        try:
-            status.update(
-                label="Enviando solicitud a la API de Mistral...", state="running"
+    try:
+        # Hacer la solicitud a la API de Mistral
+        response = requests.post(
+            "https://api.mistral.ai/v1/ocr", json=payload, headers=headers
+        )
+
+        # Revisar si la respuesta fue exitosa
+        if response.status_code == 200:
+            result = response.json()
+            st.success("Imagen procesada correctamente con API REST")
+            return extract_text_from_ocr_response(result)
+        else:
+            error_message = (
+                f"Error en API OCR ({response.status_code}): {response.text}"
             )
-
-            # Hacer la solicitud a la API de Mistral
-            response = requests.post(
-                "https://api.mistral.ai/v1/ocr", json=payload, headers=headers
-            )
-
-            # Revisar si la respuesta fue exitosa
-            if response.status_code == 200:
-                status.update(label="Imagen procesada correctamente", state="complete")
-                result = response.json()
-                return extract_text_from_ocr_response(result)
-            else:
-                error_message = (
-                    f"Error en API OCR ({response.status_code}): {response.text}"
-                )
-                status.update(label=f"Error: {error_message}", state="error")
-                return {"error": error_message}
-
-        except Exception as e:
-            error_message = f"Error al procesar imagen: {str(e)}"
-            status.update(label=f"Error: {error_message}", state="error")
+            st.error(error_message)
             return {"error": error_message}
+
+    except Exception as e:
+        error_message = f"Error al procesar imagen: {str(e)}"
+        st.error(error_message)
+        return {"error": error_message}
 
 
 # Función para extraer texto de diferentes formatos de respuesta OCR
@@ -306,67 +282,45 @@ def extract_all_text_fields(data, prefix=""):
 def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
     # Crear un directorio temporal para los archivos
     temp_dir = tempfile.mkdtemp()
-    job_id = str(uuid.uuid4())
-    
+
     try:
-        with st.status("Procesando documento con OCR...", expanded=True) as status:
-            status.update(label="Preparando documento...", state="running")
+        # Preparar el documento según su tipo
+        if document.get("type") == "document_url":
+            url = document["document_url"]
+            if url.startswith("data:application/pdf;base64,"):
+                # Guardar el PDF base64 en un archivo temporal
+                pdf_base64 = url.replace("data:application/pdf;base64,", "")
+                temp_pdf_path = os.path.join(temp_dir, "temp_document.pdf")
+                with open(temp_pdf_path, "wb") as f:
+                    f.write(base64.b64decode(pdf_base64))
 
-            # Preparar el documento según su tipo
-            if document.get("type") == "document_url":
-                url = document["document_url"]
-                if url.startswith("data:application/pdf;base64,"):
-                    # Guardar el PDF base64 en un archivo temporal
-                    pdf_base64 = url.replace("data:application/pdf;base64,", "")
-                    temp_pdf_path = os.path.join(temp_dir, "temp_document.pdf")
-                    with open(temp_pdf_path, "wb") as f:
-                        f.write(base64.b64decode(pdf_base64))
+                # Crear un comando cURL para subir el archivo
+                upload_command = [
+                    "curl",
+                    "https://api.mistral.ai/v1/files",
+                    "-H",
+                    f"Authorization: Bearer {api_key}",
+                    "-F",
+                    "purpose=ocr",
+                    "-F",
+                    f"file=@{temp_pdf_path}",
+                ]
 
-                    status.update(
-                        label="Subiendo PDF al servidor de Mistral...", state="running"
-                    )
+                # Ejecutar el comando y capturar la salida
+                st.text("Subiendo archivo al servidor de Mistral...")
+                result = subprocess.run(upload_command, capture_output=True, text=True)
 
-                    # Crear un comando cURL para subir el archivo
-                    upload_command = [
-                        "curl",
-                        "https://api.mistral.ai/v1/files",
-                        "-H",
-                        f"Authorization: Bearer {api_key}",
-                        "-F",
-                        "purpose=ocr",
-                        "-F",
-                        f"file=@{temp_pdf_path}",
-                    ]
+                if result.returncode != 0:
+                    return {"error": f"Error al subir archivo: {result.stderr}"}
 
-                    # Ejecutar el comando y capturar la salida
-                    result = subprocess.run(
-                        upload_command, capture_output=True, text=True
-                    )
+                # Parsear el resultado para obtener el ID del archivo
+                try:
+                    file_data = json.loads(result.stdout)
+                    file_id = file_data.get("id")
+                    if not file_id:
+                        return {"error": "No se pudo obtener el ID del archivo subido"}
 
-                    if result.returncode != 0:
-                        status.update(
-                            label=f"Error al subir archivo: {result.stderr}",
-                            state="error",
-                        )
-                        return {"error": f"Error al subir archivo: {result.stderr}"}
-
-                    # Parsear el resultado para obtener el ID del archivo
-                    try:
-                        file_data = json.loads(result.stdout)
-                        file_id = file_data.get("id")
-                        if not file_id:
-                            status.update(
-                                label="No se pudo obtener el ID del archivo subido",
-                                state="error",
-                            )
-                            return {
-                                "error": "No se pudo obtener el ID del archivo subido"
-                            }
-
-                        status.update(
-                            label=f"Archivo subido correctamente. ID: {file_id}",
-                            state="running",
-                        )
+                    st.text(f"Archivo subido correctamente. ID: {file_id}")
 
                     # Obtener URL firmada
                     get_url_command = [
@@ -380,37 +334,26 @@ def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
                         f"Authorization: Bearer {api_key}",
                     ]
 
-                        url_result = subprocess.run(
-                            get_url_command, capture_output=True, text=True
-                        )
-                        if url_result.returncode != 0:
-                            status.update(
-                                label=f"Error al obtener URL firmada: {url_result.stderr}",
-                                state="error",
-                            )
-                            return {
-                                "error": f"Error al obtener URL firmada: {url_result.stderr}"
-                            }
+                    url_result = subprocess.run(
+                        get_url_command, capture_output=True, text=True
+                    )
+                    if url_result.returncode != 0:
+                        return {
+                            "error": f"Error al obtener URL firmada: {url_result.stderr}"
+                        }
 
-                        url_data = json.loads(url_result.stdout)
-                        signed_url = url_data.get("url")
-                        if not signed_url:
-                            status.update(
-                                label="No se pudo obtener la URL firmada", state="error"
-                            )
-                            return {"error": "No se pudo obtener la URL firmada"}
+                    url_data = json.loads(url_result.stdout)
+                    signed_url = url_data.get("url")
+                    if not signed_url:
+                        return {"error": "No se pudo obtener la URL firmada"}
 
                     # Usar la URL firmada para el OCR
                     document = {"type": "document_url", "document_url": signed_url}
 
-                    except json.JSONDecodeError:
-                        status.update(
-                            label=f"Error al parsear respuesta del servidor: {result.stdout}",
-                            state="error",
-                        )
-                        return {
-                            "error": f"Error al parsear respuesta del servidor: {result.stdout}"
-                        }
+                except json.JSONDecodeError:
+                    return {
+                        "error": f"Error al parsear respuesta del servidor: {result.stdout}"
+                    }
 
         elif document.get("type") == "image_url":
             # Para imágenes, procesar directamente con la API REST
@@ -427,23 +370,17 @@ def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
                     # Decodificar la imagen
                     image_data = base64.b64decode(base64_data)
 
-                        # Usar la función específica para imágenes
-                        return process_image_with_rest(api_key, image_data)
-                    except Exception as e:
-                        status.update(
-                            label=f"Error al procesar imagen base64: {str(e)}",
-                            state="error",
-                        )
-                        return {"error": f"Error al procesar imagen base64: {str(e)}"}
+                    # Usar la función específica para imágenes
+                    return process_image_with_rest(api_key, image_data)
+                except Exception as e:
+                    return {"error": f"Error al procesar imagen base64: {str(e)}"}
 
-            # Preparar datos para la solicitud OCR
-            status.update(label="Preparando solicitud OCR...", state="running")
-
-            json_data = {
-                "model": "mistral-ocr-latest",
-                "document": document,
-                "include_image_base64": True,
-            }
+        # Preparar datos para la solicitud OCR
+        json_data = {
+            "model": "mistral-ocr-latest",
+            "document": document,
+            "include_image_base64": True,
+        }
 
         # Guardar en archivo temporal
         temp_json_path = os.path.join(temp_dir, "request.json")
@@ -462,45 +399,35 @@ def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
             f"@{temp_json_path}",
         ]
 
-            # Ejecutar OCR
-            status.update(label="Ejecutando OCR con Mistral API...", state="running")
-
-            if show_debug:
-                st.code(" ".join(ocr_command).replace(api_key, "****"), language="bash")
+        # Ejecutar OCR
+        st.text("Ejecutando OCR con cURL...")
+        if show_debug:
+            st.code(" ".join(ocr_command).replace(api_key, "****"), language="bash")
 
         ocr_result = subprocess.run(ocr_command, capture_output=True, text=True)
 
-            if ocr_result.returncode != 0:
-                error_details = {
-                    "error": f"Error en OCR (código {ocr_result.returncode})",
-                    "stderr": ocr_result.stderr,
-                    "stdout": ocr_result.stdout,
-                }
-                status.update(
-                    label=f"Error durante la ejecución de cURL: {error_details['error']}",
-                    state="error",
-                )
-                return {"error": json.dumps(error_details)}
+        if ocr_result.returncode != 0:
+            error_details = {
+                "error": f"Error en OCR (código {ocr_result.returncode})",
+                "stderr": ocr_result.stderr,
+                "stdout": ocr_result.stdout,
+            }
+            st.error(f"Error durante la ejecución de cURL: {error_details['error']}")
+            return {"error": json.dumps(error_details)}
 
-            # Comprobar si hay errores en la respuesta
-            if (
-                "error" in ocr_result.stdout.lower()
-                or "not found" in ocr_result.stdout.lower()
-            ):
-                status.update(
-                    label="La API respondió, pero con un error", state="warning"
-                )
+        # Comprobar si hay errores en la respuesta
+        if (
+            "error" in ocr_result.stdout.lower()
+            or "not found" in ocr_result.stdout.lower()
+        ):
+            st.warning("La API respondió, pero con un error")
+            if show_debug:
+                st.code(ocr_result.stdout, language="json")
 
-                if show_debug:
-                    st.code(ocr_result.stdout, language="json")
-
-                # Intentar método alternativo
-                if "document understanding" not in method.lower():
-                    status.update(
-                        label="Intentando procesar con método alternativo...",
-                        state="running",
-                    )
-                    return process_with_document_understanding(api_key, document)
+            # Intentar método alternativo
+            if "document understanding" not in method.lower():
+                st.info("Intentando procesar con el método Document Understanding...")
+                return process_with_document_understanding(api_key, document)
 
         try:
             # Intentar parsear la respuesta JSON
@@ -509,51 +436,35 @@ def process_ocr_with_curl(api_key, document, method="REST", show_debug=False):
             # Extraer el texto de la respuesta
             extraction_result = extract_text_from_ocr_response(response_json)
 
-                if "error" in extraction_result:
-                    status.update(
-                        label=f"Error al extraer texto: {extraction_result['error']}",
-                        state="error",
-                    )
-                    return extraction_result
+            if "error" in extraction_result:
+                return extraction_result
 
-                if show_debug and "raw_response" in extraction_result:
-                    st.subheader("Respuesta completa de la API")
-                    st.json(extraction_result["raw_response"])
+            if show_debug and "raw_response" in extraction_result:
+                st.subheader("Respuesta completa de la API")
+                st.json(extraction_result["raw_response"])
 
-                if "text" in extraction_result:
-                    status.update(
-                        label="Documento procesado correctamente", state="complete"
-                    )
-                    return {"pages": [{"markdown": extraction_result["text"]}]}
-                else:
-                    status.update(
-                        label="Documento procesado, pero sin texto extraído",
-                        state="complete",
-                    )
-                    return response_json
+            if "text" in extraction_result:
+                return {"pages": [{"markdown": extraction_result["text"]}]}
+            else:
+                return response_json
 
-            except json.JSONDecodeError:
-                if not ocr_result.stdout:
-                    status.update(label="Respuesta vacía del servidor", state="error")
-                    return {"error": "Respuesta vacía del servidor"}
+        except json.JSONDecodeError:
+            if not ocr_result.stdout:
+                return {"error": "Respuesta vacía del servidor"}
 
-                # Si la respuesta no es JSON, podría ser texto plano
-                if (
-                    ocr_result.stdout.strip()
-                    and len(ocr_result.stdout) < 1000
-                    and not ocr_result.stdout.startswith("{")
-                    and not ocr_result.stdout.startswith("[")
-                ):
-                    # Podría ser texto plano, devolverlo como resultado
-                    status.update(
-                        label="Texto extraído correctamente", state="complete"
-                    )
-                    return {"pages": [{"markdown": ocr_result.stdout}]}
+            # Si la respuesta no es JSON, podría ser texto plano
+            if (
+                ocr_result.stdout.strip()
+                and len(ocr_result.stdout) < 1000
+                and not ocr_result.stdout.startswith("{")
+                and not ocr_result.stdout.startswith("[")
+            ):
+                # Podría ser texto plano, devolverlo como resultado
+                return {"pages": [{"markdown": ocr_result.stdout}]}
 
-                status.update(label=f"Error al parsear respuesta OCR", state="error")
-                return {
-                    "error": f"Error al parsear respuesta OCR: {ocr_result.stdout[:200]}..."
-                }
+            return {
+                "error": f"Error al parsear respuesta OCR: {ocr_result.stdout[:200]}..."
+            }
 
     finally:
         # Limpiar archivos temporales
@@ -574,60 +485,51 @@ def process_with_document_understanding(api_key, document):
 
     # Extraer URL del documento
     doc_url = document.get("document_url", "") or document.get("image_url", "")
-    job_id = str(uuid.uuid4())
 
     if not doc_url:
         return {
             "error": "No se pudo extraer URL del documento para el método alternativo"
         }
 
-    with st.status(
-        "Procesando con Document Understanding API...", expanded=True
-    ) as status:
-        status.update(label="Preparando solicitud...", state="running")
-
-        # Construir datos para chat completions
-        doc_type = "document_url" if "document_url" in document else "image_url"
-        request_data = {
-            "model": "mistral-small-latest",  # Modelo avanzado para comprensión de documentos
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Extrae todo el texto de este documento manteniendo su estructura y formato original. Conserva párrafos, listas, tablas y la jerarquía del contenido exactamente como aparece. No añadas interpretaciones ni resúmenes.",
-                        },
-                        {"type": doc_type, doc_type: doc_url},
-                    ],
-                }
-            ],
-            "document_image_limit": 10,  # Límites para documentos grandes
-            "document_page_limit": 100,
-        }
+    # Construir datos para chat completions
+    doc_type = "document_url" if "document_url" in document else "image_url"
+    request_data = {
+        "model": "mistral-large-latest",  # Modelo avanzado para comprensión de documentos
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Extrae todo el texto de este documento manteniendo su estructura y formato original. Conserva párrafos, listas, tablas y la jerarquía del contenido exactamente como aparece. No añadas interpretaciones ni resúmenes.",
+                    },
+                    {"type": doc_type, doc_type: doc_url},
+                ],
+            }
+        ],
+        "document_image_limit": 10,  # Límites para documentos grandes
+        "document_page_limit": 100,
+    }
 
     # Guardar la solicitud en un archivo temporal para inspección
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
         json.dump(request_data, tmp, indent=2)
         temp_json_path = tmp.name
 
-        status.update(
-            label="Enviando solicitud a Document Understanding API...", state="running"
-        )
+    # Comando cURL para Document Understanding
+    du_command = [
+        "curl",
+        "https://api.mistral.ai/v1/chat/completions",
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        f"Authorization: Bearer {api_key}",
+        "-d",
+        f"@{temp_json_path}",
+    ]
 
-        # Comando cURL para Document Understanding
-        du_command = [
-            "curl",
-            "https://api.mistral.ai/v1/chat/completions",
-            "-H",
-            "Content-Type: application/json",
-            "-H",
-            f"Authorization: Bearer {api_key}",
-            "-d",
-            f"@{temp_json_path}",
-        ]
-
-        du_result = subprocess.run(du_command, capture_output=True, text=True)
+    st.text("Ejecutando Document Understanding con cURL...")
+    du_result = subprocess.run(du_command, capture_output=True, text=True)
 
     # Limpiar archivo temporal
     try:
@@ -635,35 +537,23 @@ def process_with_document_understanding(api_key, document):
     except:
         pass
 
-        if du_result.returncode != 0:
-            status.update(
-                label=f"Error en Document Understanding: {du_result.stderr}",
-                state="error",
-            )
-            return {"error": f"Error en Document Understanding: {du_result.stderr}"}
+    if du_result.returncode != 0:
+        return {"error": f"Error en Document Understanding: {du_result.stderr}"}
 
     try:
         result_json = json.loads(du_result.stdout)
         if "choices" in result_json and len(result_json["choices"]) > 0:
             content = result_json["choices"][0]["message"]["content"]
 
-                # Simular el formato de respuesta de OCR
-                pages = [{"markdown": content}]
-                status.update(
-                    label="Documento procesado correctamente mediante Document Understanding",
-                    state="complete",
-                )
-                return {"pages": pages}
-            else:
-                status.update(
-                    label="Respuesta no válida de Document Understanding", state="error"
-                )
-                return {
-                    "error": f"Respuesta no válida de Document Understanding: {du_result.stdout[:200]}..."
-                }
-        except json.JSONDecodeError:
-            status.update(label="Error al parsear respuesta", state="error")
-            return {"error": f"Error al parsear respuesta: {du_result.stdout[:200]}..."}
+            # Simular el formato de respuesta de OCR
+            pages = [{"markdown": content}]
+            return {"pages": pages}
+        else:
+            return {
+                "error": f"Respuesta no válida de Document Understanding: {du_result.stdout[:200]}..."
+            }
+    except json.JSONDecodeError:
+        return {"error": f"Error al parsear respuesta: {du_result.stdout[:200]}..."}
 
 
 # Función para preparar una imagen para procesamiento
@@ -693,7 +583,7 @@ def prepare_image_for_ocr(file_data):
 
     except Exception as e:
         # Si hay cualquier error, devolver los datos originales
-        print(f"Warning: No se pudo optimizar la imagen: {str(e)}")
+        st.warning(f"No se pudo optimizar la imagen: {str(e)}")
         return file_data, "image/jpeg"  # Formato por defecto
 
 
@@ -732,87 +622,66 @@ else:
     if valid:
         st.success(f"✅ {message}")
     else:
-        # Usar el método configurado en session_state
-        method = st.session_state["processing_method"]
-        if method == "OCR API (Standard)":
-            ocr_response = process_ocr_with_curl(
-                api_key,
-                document,
-                method="OCR",
-                show_debug=st.session_state["config"]["show_technical_details"],
-            )
-        elif method == "Document Understanding API":
-            ocr_response = process_with_document_understanding(api_key, document)
-        else:  # Auto
-            ocr_response = process_ocr_with_curl(
-                api_key,
-                document,
-                method="Auto",
-                show_debug=st.session_state["config"]["show_technical_details"],
-            )
-
-    # Guardar la imagen para vista previa
-    if file_type == "Imagen":
-        st.session_state["image_bytes"].append(file_bytes)
-
-    return {"response": ocr_response, "preview_src": preview_src}
-
-
-# Función para realizar post-procesamiento del texto extraído
-@catch_exceptions
-def post_process_text(text, method):
-    """
-    Realiza procesamiento adicional al texto extraído
-    """
-    if method == "none":
-        return text
-    elif method == "summary":
-        # Implementar resumen del documento
-        return f"**Resumen del documento**\n\n{text[:500]}...\n\n*Este es un resumen automático del documento.*"
-    elif method == "extract_info":
-        # Extraer información clave (simulado)
-        return f"**Información clave extraída**\n\nEl documento contiene aproximadamente {len(text.split())} palabras y {len(text.splitlines())} líneas.\n\n{text}"
-    elif method == "translate":
-        # Simular traducción
-        return f"**Texto traducido**\n\n{text}\n\n*Este es el texto traducido del documento.*"
-    return text
-
-
-# Sidebar para configuración
-with st.sidebar:
-    st.title("Configuración")
-
-    # Intentar mostrar el logo si está disponible en línea
-    try:
-        st.image("https://mistral.ai/images/logo.svg", width=200)
-    except:
-        # Si no se puede cargar la imagen, mostrar un título alternativo
-        st.markdown("# Mistral AI")
-
-    # API Key (solo si no está disponible)
-    if not api_key:
-        api_key_input = st.text_input(
-            "API Key de Mistral",
-            type="password",
-            help="Introduce tu API Key de Mistral",
+        st.warning(
+            f"⚠️ {message} - Algunos métodos de procesamiento podrían no funcionar correctamente."
         )
-        if api_key_input:
-            api_key = api_key_input
-            # Validar la API key
-            valid, message = validate_api_key(api_key)
-            if valid:
-                st.success(f"✅ {message}")
-            else:
-                st.error(f"❌ {message}")
-        else:
-            st.warning("⚠️ Se requiere una API Key para usar esta aplicación")
+
+# Inicializar variables de estado de sesión para persistencia
+if "ocr_result" not in st.session_state:
+    st.session_state["ocr_result"] = []
+if "preview_src" not in st.session_state:
+    st.session_state["preview_src"] = []
+if "image_bytes" not in st.session_state:
+    st.session_state["image_bytes"] = []
+if "file_names" not in st.session_state:
+    st.session_state["file_names"] = []
+
+# Crear columnas para los controles
+col1, col2 = st.columns(2)
+
+# Columna 1: Tipo de archivo y fuente
+with col1:
+    st.markdown("### Tipo de contenido")
+    file_type = st.radio(
+        "Selecciona el tipo de archivo",
+        options=["PDF", "Imagen"],
+        help="Selecciona PDF para documentos o Imagen para archivos JPG, PNG, etc.",
+    )
+
+    st.markdown("### Método de carga")
+    source_type = st.radio(
+        "Selecciona el método de carga",
+        options=["URL", "Archivo local"],
+        help="Selecciona URL para procesar archivos desde internet o Archivo local para subir desde tu dispositivo.",
+    )
+
+# Columna 2: URLs o carga de archivos
+with col2:
+    st.markdown("### Fuente de datos")
+    input_url = ""
+    uploaded_files = []
+
+    if source_type == "URL":
+        input_url = st.text_area(
+            "Introduce una o varias URLs (una por línea)",
+            help="Introduce las URLs de los documentos que quieres procesar, cada una en una línea nueva.",
+        )
     else:
-        st.success("✅ API Key configurada correctamente")
+        acceptable_types = ["pdf"] if file_type == "PDF" else ["jpg", "jpeg", "png"]
+        uploaded_files = st.file_uploader(
+            "Sube uno o más archivos",
+            type=acceptable_types,
+            accept_multiple_files=True,
+            help=f"Sube archivos {', '.join(acceptable_types)} desde tu dispositivo.",
+        )
 
-    st.divider()
+# Botón de procesamiento con estilo
+st.markdown("### Procesamiento")
 
-    # Selección de método de procesamiento
-    st.subheader("Método de procesamiento")
+# Opciones avanzadas
+with st.expander("⚙️ Opciones avanzadas"):
+    st.markdown("#### Configuración de procesamiento")
+
     processing_method = st.radio(
         "Método de procesamiento",
         options=[
@@ -834,224 +703,217 @@ with st.sidebar:
         help="Optimiza las imágenes antes de enviarlas para OCR (recomendado)",
     )
 
-    # API REST directa para imágenes
-    st.session_state["config"]["direct_api_for_images"] = st.toggle(
-        "API REST directa para imágenes",
-        value=st.session_state["config"]["direct_api_for_images"],
-        help="Usa un método optimizado para procesar imágenes",
-    )
+    # Opciones específicas para imágenes
+    if file_type == "Imagen":
+        st.markdown("#### Opciones de imagen")
 
-    # Procesar automáticamente al subir
-    st.session_state["config"]["process_on_upload"] = st.toggle(
-        "Procesar al subir",
-        value=st.session_state["config"]["process_on_upload"],
-        help="Procesa automáticamente los documentos al subirlos",
-    )
-
-    # Mostrar detalles técnicos
-    st.session_state["config"]["show_technical_details"] = st.toggle(
-        "Mostrar detalles técnicos",
-        value=st.session_state["config"]["show_technical_details"],
-        help="Muestra información técnica durante el procesamiento",
-    )
-
-    st.divider()
-
-    # Post-procesamiento
-    st.subheader("Post-procesamiento")
-    post_processing = st.selectbox(
-        "Operación después de OCR:",
-        options=[
-            "Ninguno",
-            "Resumir documento",
-            "Extraer información clave",
-            "Traducir contenido",
-        ],
-        index=0,
-        help="Procesamiento adicional después de extraer el texto",
-    )
-
-    # Mapear opciones a valores internos
-    post_processing_map = {
-        "Ninguno": "none",
-        "Resumir documento": "summary",
-        "Extraer información clave": "extract_info",
-        "Traducir contenido": "translate",
-    }
-    st.session_state["config"]["post_processing"] = post_processing_map[post_processing]
-
-    # Información sobre la app (fuera de expander para evitar anidamiento)
-    st.divider()
-    st.subheader("ℹ️ Acerca de")
-    st.markdown(
-        """
-    **Mistral OCR App v3.0**
-    
-    Esta aplicación permite extraer texto de documentos PDF e imágenes utilizando 
-    Mistral OCR, manteniendo la estructura y formato original.
-    
-    **Desarrollada por**: AI Team
-    
-    Para más información, visita [Mistral AI](https://mistral.ai).
-    """
-    )
-
-# Contenedor principal
-st.markdown('<h1 class="main-header">🔍 Mistral OCR App</h1>', unsafe_allow_html=True)
-
-st.markdown(
-    """
-<div class="info-box">
-  📝 Esta aplicación extrae texto de documentos PDF e imágenes manteniendo su estructura original. 
-  Simplemente sube tus archivos y la IA hará el resto.
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-# Área principal para subir archivos
-st.markdown('<h2 class="sub-header">📤 Subir documentos</h2>', unsafe_allow_html=True)
-
-# Mostrar instrucciones para la carga de archivos
-st.markdown(
-    """
-<div style="margin-bottom: 20px;">
-    <p>Selecciona tus documentos PDF o imágenes usando el botón de carga a continuación.</p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-# Crear un control estándar de carga de archivos (sin drag & drop personalizado)
-uploaded_files = st.file_uploader(
-    "Seleccionar archivos",
-    type=["pdf", "jpg", "jpeg", "png"],
-    accept_multiple_files=True,
-    help="Soporta archivos PDF, JPG, JPEG y PNG",
-)
-
-# Verificar si hay archivos subidos
-if uploaded_files:
-    # Detectar automáticamente el tipo de cada archivo
-    if "detected_types" not in st.session_state:
-        st.session_state["detected_types"] = {}
-
-    for file in uploaded_files:
-        if file.name not in st.session_state["detected_types"]:
-            st.session_state["detected_types"][file.name] = detect_document_type(file)
-
-    # Mostrar los archivos detectados
-    st.markdown(
-        '<h2 class="sub-header">📑 Documentos detectados</h2>', unsafe_allow_html=True
-    )
-
-    file_cols = st.columns(min(3, len(uploaded_files)))
-    for i, file in enumerate(uploaded_files):
-        col = file_cols[i % len(file_cols)]
-        file_type = st.session_state["detected_types"].get(file.name, "Desconocido")
-
-        with col:
-            st.markdown(
-                f"""
-            <div class="processing-option">
-                <h4>{file.name}</h4>
-                <p>Tipo: {file_type}</p>
-                <p>Tamaño: {file.size / 1024:.1f} KB</p>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-    # Botón para procesar documentos
-    if not st.session_state["config"]["process_on_upload"]:
-        process_button = st.button(
-            "🔍 Procesar todos los documentos",
-            help="Inicia el procesamiento OCR para todos los documentos",
-            use_container_width=True,
-            type="primary",
+        direct_api_for_images = st.checkbox(
+            "Usar API REST directa para imágenes",
+            value=True,
+            help="Usa la API REST directamente para procesar imágenes (más confiable)",
         )
+
+# Información sobre la API
+st.info(
+    """
+**Nota importante sobre la API de Mistral OCR**: 
+El servicio OCR de Mistral podría requerir un plan específico o estar en fase beta con acceso limitado.
+Si experimentas errores, verifica tu cuenta en mistral.ai o contacta con soporte.
+"""
+)
+
+process_button = st.button(
+    "📄 Procesar documentos",
+    help="Haz clic para comenzar el procesamiento de OCR en los documentos seleccionados.",
+    use_container_width=True,
+)
+
+# Lógica de procesamiento
+if process_button:
+    if source_type == "URL" and not input_url.strip():
+        st.error("Por favor, introduce al menos una URL válida.")
+    elif source_type == "Archivo local" and not uploaded_files:
+        st.error("Por favor, sube al menos un archivo.")
     else:
-        process_button = True  # Procesar automáticamente
+        with st.spinner("Preparando para procesar..."):
+            # Reiniciar los resultados
+            st.session_state["ocr_result"] = []
+            st.session_state["preview_src"] = []
+            st.session_state["image_bytes"] = []
+            st.session_state["file_names"] = []
 
-    # Procesar documentos si se presiona el botón o está activado el proceso automático
-    if process_button:
-        # Reiniciar resultados
-        st.session_state["ocr_result"] = []
-        st.session_state["preview_src"] = []
-        st.session_state["image_bytes"] = []
-        st.session_state["file_names"] = []
+            # Preparar las fuentes
+            sources = input_url.split("\n") if source_type == "URL" else uploaded_files
+            sources = [
+                s
+                for s in sources
+                if s and (isinstance(s, str) and s.strip() or not isinstance(s, str))
+            ]
 
-        # Procesar cada archivo
-        with st.status("Procesando documentos...", expanded=True) as status:
-            status.update(
-                label=f"Procesando {len(uploaded_files)} documento(s)...",
-                state="running",
-            )
+            if not sources:
+                st.error("No se encontraron fuentes válidas para procesar.")
+                st.stop()
 
-            # Crear barra de progreso
+            st.info(f"Procesando {len(sources)} documento(s)...")
+
+            # Crear una barra de progreso
             progress_bar = st.progress(0)
 
-            for idx, file in enumerate(uploaded_files):
-                file_type = st.session_state["detected_types"].get(file.name, "PDF")
-                status.update(
-                    label=f"Procesando {file.name} ({idx+1}/{len(uploaded_files)})...",
-                    state="running",
-                )
-                progress_bar.progress((idx) / len(uploaded_files))
+            # Procesar cada fuente
+            for idx, source in enumerate(sources):
+                progress_text = f"Procesando {'URL' if source_type == 'URL' else 'archivo'} {idx+1}/{len(sources)}"
+                progress_value = (idx) / len(sources)
+                progress_bar.progress(progress_value, text=progress_text)
 
-                try:
-                    # Procesar documento automáticamente
-                    result = process_document_auto(api_key, file, file_type)
-
-                    # Extraer resultados
-                    ocr_response = result["response"]
-                    preview_src = result["preview_src"]
-
-                    # Procesar la respuesta
-                    if "error" in ocr_response:
-                        result_text = (
-                            f"Error al procesar {file.name}: {ocr_response['error']}"
-                        )
-                        status.update(
-                            label=f"Error en {file.name}: {ocr_response['error']}",
-                            state="error",
-                        )
-                    else:
-                        pages = ocr_response.get("pages", [])
-                        if pages:
-                            result_text = "\n\n".join(
-                                page.get("markdown", "")
-                                for page in pages
-                                if "markdown" in page
-                            )
-                            if result_text.strip():
-                                # Aplicar post-procesamiento si está configurado
-                                if (
-                                    st.session_state["config"]["post_processing"]
-                                    != "none"
-                                ):
-                                    result_text = post_process_text(
-                                        result_text,
-                                        st.session_state["config"]["post_processing"],
-                                    )
-                                status.update(
-                                    label=f"{file.name} procesado correctamente",
-                                    state="running",
-                                )
+                with st.spinner(progress_text):
+                    try:
+                        # Preparar el documento según el tipo y la fuente
+                        if file_type == "PDF":
+                            if source_type == "URL":
+                                document = {
+                                    "type": "document_url",
+                                    "document_url": source.strip(),
+                                }
+                                preview_src = source.strip()
+                                file_name = source.split("/")[-1]
                             else:
-                                result_text = f"No se encontró texto en {file.name}."
-                                status.update(
-                                    label=f"No se encontró texto en {file.name}",
-                                    state="warning",
+                                file_bytes = source.read()
+                                encoded_pdf = base64.b64encode(file_bytes).decode(
+                                    "utf-8"
                                 )
+                                document = {
+                                    "type": "document_url",
+                                    "document_url": f"data:application/pdf;base64,{encoded_pdf}",
+                                }
+                                preview_src = (
+                                    f"data:application/pdf;base64,{encoded_pdf}"
+                                )
+                                file_name = source.name
+                                # Reiniciar el cursor del archivo para futuras operaciones
+                                source.seek(0)
+                        else:  # Imagen
+                            if source_type == "URL":
+                                document = {
+                                    "type": "image_url",
+                                    "image_url": source.strip(),
+                                }
+                                preview_src = source.strip()
+                                file_name = source.split("/")[-1]
+                            else:
+                                # Leer los bytes de la imagen
+                                file_bytes = source.read()
+
+                                # Optimizar la imagen si está habilitado
+                                if optimize_images:
+                                    file_bytes, mime_type = prepare_image_for_ocr(
+                                        file_bytes
+                                    )
+                                else:
+                                    mime_type = source.type
+
+                                # Guardar los bytes originales o optimizados para vista previa
+                                st.session_state["image_bytes"].append(file_bytes)
+
+                                # Codificar en base64 para enviar a la API
+                                encoded_image = base64.b64encode(file_bytes).decode(
+                                    "utf-8"
+                                )
+
+                                # Preparar el documento con la imagen
+                                document = {
+                                    "type": "image_url",
+                                    "image_url": f"data:{mime_type};base64,{encoded_image}",
+                                }
+                                preview_src = f"data:{mime_type};base64,{encoded_image}"
+                                file_name = source.name
+
+                                # Reiniciar el cursor del archivo para futuras operaciones
+                                source.seek(0)
+
+                        # Llamar a la API de OCR
+                        st.text(f"Enviando documento {file_name} para procesamiento...")
+
+                        # Si es una imagen y está habilitada la API REST directa, usar ese método
+                        if (
+                            file_type == "Imagen"
+                            and direct_api_for_images
+                            and source_type == "Archivo local"
+                        ):
+                            ocr_response = process_image_with_rest(
+                                api_key_input, file_bytes
+                            )
+                            # Convertir la respuesta al formato esperado por el resto del código
+                            if "text" in ocr_response:
+                                ocr_response = {
+                                    "pages": [{"markdown": ocr_response["text"]}]
+                                }
                         else:
-                            result_text = (
-                                f"Estructura de respuesta inesperada para {file.name}."
-                            )
-                            status.update(
-                                label=f"Estructura inesperada en {file.name}",
-                                state="warning",
-                            )
+                            # Determinar el método a usar basado en la selección
+                            if processing_method == "OCR API (Standard)":
+                                ocr_response = process_ocr_with_curl(
+                                    api_key_input,
+                                    document,
+                                    method="OCR",
+                                    show_debug=show_technical_details,
+                                )
+                            elif processing_method == "Document Understanding API":
+                                ocr_response = process_with_document_understanding(
+                                    api_key_input, document
+                                )
+                            else:  # Auto
+                                ocr_response = process_ocr_with_curl(
+                                    api_key_input,
+                                    document,
+                                    method="Auto",
+                                    show_debug=show_technical_details,
+                                )
+
+                        # Procesar la respuesta
+                        if "error" in ocr_response:
+                            result_text = f"Error al procesar {file_name}: {ocr_response['error']}"
+                            st.error(result_text)
+
+                            # Mostrar detalles técnicos si está habilitado
+                            if show_technical_details and isinstance(
+                                ocr_response["error"], str
+                            ):
+                                try:
+                                    error_details = json.loads(ocr_response["error"])
+                                    st.markdown("**Detalles técnicos del error:**")
+                                    st.code(
+                                        json.dumps(error_details, indent=2),
+                                        language="json",
+                                    )
+                                except:
+                                    st.text(ocr_response["error"])
+                        else:
+                            pages = ocr_response.get("pages", [])
+                            if pages:
+                                result_text = "\n\n".join(
+                                    page.get("markdown", "")
+                                    for page in pages
+                                    if "markdown" in page
+                                )
+                                if result_text.strip():
+                                    st.success(
+                                        f"Documento {file_name} procesado correctamente."
+                                    )
+                                else:
+                                    result_text = (
+                                        f"No se encontró texto en {file_name}."
+                                    )
+                                    st.warning(result_text)
+                            else:
+                                result_text = f"Estructura de respuesta inesperada para {file_name}."
+                                st.warning(result_text)
+
+                                # Mostrar la respuesta completa si está habilitado
+                                if show_technical_details:
+                                    st.markdown("**Estructura de respuesta:**")
+                                    st.code(
+                                        json.dumps(ocr_response, indent=2),
+                                        language="json",
+                                    )
 
                         # Almacenar resultados
                         st.session_state["ocr_result"].append(result_text)
@@ -1062,230 +924,228 @@ if uploaded_files:
                         if idx < len(sources) - 1:  # No esperar después del último
                             time.sleep(1)
 
-                except Exception as e:
-                    error_msg = str(e)
-                    status.update(
-                        label=f"Error al procesar {file.name}: {error_msg}",
-                        state="error",
-                    )
+                    except Exception as e:
+                        error_msg = str(e)
+                        st.error(
+                            f"Error al procesar {'URL' if source_type == 'URL' else 'archivo'} {idx+1}: {error_msg}"
+                        )
 
-                    # Añadir un resultado vacío para mantener la sincronización
-                    st.session_state["ocr_result"].append(f"Error: {error_msg}")
-                    st.session_state["preview_src"].append("")
-                    st.session_state["file_names"].append(file.name)
+                        # Mostrar detalles técnicos si está habilitado
+                        if show_technical_details:
+                            import traceback
 
-            # Actualizar progreso a completado
-            progress_bar.progress(1.0)
-            status.update(
-                label=f"Procesamiento completado. {len(st.session_state['ocr_result'])} documento(s) procesados.",
-                state="complete",
+                            st.markdown("**Detalles técnicos del error:**")
+                            st.code(traceback.format_exc(), language="python")
+
+                        # Añadir un resultado vacío para mantener la sincronización
+                        st.session_state["ocr_result"].append(f"Error: {error_msg}")
+                        if source_type == "URL":
+                            st.session_state["preview_src"].append("")
+                            st.session_state["file_names"].append(f"URL-{idx+1}")
+                        else:
+                            st.session_state["preview_src"].append("")
+                            file_name = getattr(source, "name", f"Archivo-{idx+1}")
+                            st.session_state["file_names"].append(file_name)
+                        continue
+
+            # Actualizar la barra de progreso a completado
+            progress_bar.progress(1.0, text="¡Procesamiento completado!")
+            st.success(
+                f"¡Procesamiento completado! Se procesaron {len(st.session_state['ocr_result'])} documento(s)."
             )
 
-    # Mostrar resultados si están disponibles
-    if st.session_state.get("ocr_result"):
-        st.markdown(
-            '<h2 class="sub-header">📋 Resultados OCR</h2>', unsafe_allow_html=True
+# Mostrar resultados si están disponibles
+if st.session_state.get("ocr_result"):
+    st.markdown("## Resultados del OCR")
+
+    # Crear tabs solo para los documentos que tienen nombres
+    if len(st.session_state["file_names"]) > 0:
+        tabs = st.tabs(
+            [
+                f"Documento {idx+1}: {st.session_state['file_names'][idx]}"
+                for idx in range(len(st.session_state["file_names"]))
+            ]
         )
 
-        # Crear tabs para cada documento
-        if len(st.session_state["file_names"]) > 0:
-            tabs = st.tabs(
-                [
-                    f"📄 {st.session_state['file_names'][idx]}"
-                    for idx in range(len(st.session_state["file_names"]))
-                ]
-            )
+        for idx, tab in enumerate(tabs):
+            with tab:
+                col1, col2 = st.columns(2)
 
-            for idx, tab in enumerate(tabs):
-                with tab:
-                    # Contenido del tab (sin usar expander para evitar anidamiento)
-                    st.markdown('<div class="tab-content">', unsafe_allow_html=True)
-
-                    # Dividir en columnas para vista previa y texto
-                    col1, col2 = st.columns([1, 1])
-
-                    with col1:
-                        st.markdown(
-                            '<h3 style="margin-bottom: 1rem;">Vista previa</h3>',
-                            unsafe_allow_html=True,
+                with col1:
+                    st.subheader(f"Vista previa del documento")
+                    if (
+                        idx < len(st.session_state["preview_src"])
+                        and st.session_state["preview_src"][idx]
+                    ):
+                        if "pdf" in st.session_state["file_names"][idx].lower():
+                            pdf_embed_html = f'<iframe src="{st.session_state["preview_src"][idx]}" width="100%" height="600" frameborder="0"></iframe>'
+                            st.markdown(pdf_embed_html, unsafe_allow_html=True)
+                        else:
+                            if source_type == "Archivo local" and idx < len(
+                                st.session_state.get("image_bytes", [])
+                            ):
+                                st.image(
+                                    st.session_state["image_bytes"][idx],
+                                    caption=f"Imagen original: {st.session_state['file_names'][idx]}",
+                                )
+                            elif st.session_state["preview_src"][idx]:
+                                st.image(
+                                    st.session_state["preview_src"][idx],
+                                    caption=f"Imagen original: {st.session_state['file_names'][idx]}",
+                                )
+                            else:
+                                st.warning(
+                                    "No hay vista previa disponible para este documento."
+                                )
+                    else:
+                        st.warning(
+                            "No hay vista previa disponible para este documento."
                         )
 
-                        # Mostrar vista previa del documento
-                        if (
-                            idx < len(st.session_state["preview_src"])
-                            and st.session_state["preview_src"][idx]
-                        ):
-                            doc_type = st.session_state["detected_types"].get(
-                                st.session_state["file_names"][idx], "PDF"
-                            )
-
-                            if doc_type == "PDF":
-                                pdf_embed_html = f"""
-                                <div class="document-preview">
-                                    <iframe src="{st.session_state["preview_src"][idx]}" 
-                                    width="100%" height="500" frameborder="0"></iframe>
-                                </div>
-                                """
-                                st.markdown(pdf_embed_html, unsafe_allow_html=True)
-                            else:
-                                if idx < len(st.session_state.get("image_bytes", [])):
-                                    st.image(
-                                        st.session_state["image_bytes"][idx],
-                                        caption=f"Imagen original: {st.session_state['file_names'][idx]}",
-                                        use_column_width=True,
-                                    )
-                                elif st.session_state["preview_src"][idx]:
-                                    st.image(
-                                        st.session_state["preview_src"][idx],
-                                        caption=f"Imagen original: {st.session_state['file_names'][idx]}",
-                                        use_column_width=True,
-                                    )
-                                else:
-                                    st.warning(
-                                        "No hay vista previa disponible para este documento."
-                                    )
-                        else:
-                            st.warning(
-                                "No hay vista previa disponible para este documento."
-                            )
-
-                    with col2:
-                        st.markdown(
-                            '<h3 style="margin-bottom: 1rem;">Texto extraído</h3>',
-                            unsafe_allow_html=True,
+                with col2:
+                    st.subheader(f"Texto extraído")
+                    if idx < len(st.session_state["ocr_result"]):
+                        st.text_area(
+                            "Resultado OCR",
+                            value=st.session_state["ocr_result"][idx],
+                            height=450,
+                            key=f"text_area_{idx}",
                         )
 
-                        # Mostrar texto extraído
-                        if idx < len(st.session_state["ocr_result"]):
-                            if st.session_state["ocr_result"][idx].startswith("Error:"):
-                                st.error(st.session_state["ocr_result"][idx])
-                            else:
-                                st.markdown(st.session_state["ocr_result"][idx])
+                        if not st.session_state["ocr_result"][idx].startswith("Error:"):
+                            st.subheader(f"Descargar resultados")
 
-                                # Botones de descarga mejorados (sin estar dentro de un expander)
+                            def create_download_link(data, filetype, filename):
+                                b64 = base64.b64encode(data.encode()).decode()
+                                href = f'<a href="data:{filetype};base64,{b64}" download="{filename}" class="download-button">Descargar {filename}</a>'
+                                return href
+
+                            # Crear nombre de archivo base
+                            base_filename = st.session_state["file_names"][idx].split(
+                                "."
+                            )[0]
+
+                            # Opciones de descarga
+                            download_col1, download_col2, download_col3 = st.columns(3)
+
+                            with download_col1:
+                                json_data = json.dumps(
+                                    {"ocr_result": st.session_state["ocr_result"][idx]},
+                                    ensure_ascii=False,
+                                    indent=2,
+                                )
                                 st.markdown(
-                                    '<h4 style="margin-top: 2rem; margin-bottom: 1rem;">Descargar resultados</h4>',
+                                    create_download_link(
+                                        json_data,
+                                        "application/json",
+                                        f"{base_filename}.json",
+                                    ),
                                     unsafe_allow_html=True,
                                 )
 
-                                # Crear nombre de archivo base
-                                base_filename = st.session_state["file_names"][
-                                    idx
-                                ].split(".")[0]
-
-                                # Botones de descarga
-                                btn1, btn2, btn3 = st.columns(3)
-
-                                with btn1:
-                                    json_data = json.dumps(
-                                        {
-                                            "ocr_result": st.session_state[
-                                                "ocr_result"
-                                            ][idx]
-                                        },
-                                        ensure_ascii=False,
-                                        indent=2,
-                                    )
-                                    st.markdown(
-                                        create_download_link(
-                                            json_data,
-                                            "application/json",
-                                            f"{base_filename}.json",
-                                            "json-button",
-                                        ),
-                                        unsafe_allow_html=True,
-                                    )
-
-                                with btn2:
-                                    st.markdown(
-                                        create_download_link(
-                                            st.session_state["ocr_result"][idx],
-                                            "text/plain",
-                                            f"{base_filename}.txt",
-                                            "text-button",
-                                        ),
-                                        unsafe_allow_html=True,
-                                    )
-
-                                with btn3:
-                                    st.markdown(
-                                        create_download_link(
-                                            st.session_state["ocr_result"][idx],
-                                            "text/markdown",
-                                            f"{base_filename}.md",
-                                            "markdown-button",
-                                        ),
-                                        unsafe_allow_html=True,
-                                    )
-
-                                # Opciones de post-procesamiento (fuera de expander)
+                            with download_col2:
                                 st.markdown(
-                                    '<h4 style="margin-top: 2rem; margin-bottom: 1rem;">Acciones adicionales</h4>',
+                                    create_download_link(
+                                        st.session_state["ocr_result"][idx],
+                                        "text/plain",
+                                        f"{base_filename}.txt",
+                                    ),
                                     unsafe_allow_html=True,
                                 )
 
-                                action_col1, action_col2 = st.columns(2)
-
-                                with action_col1:
-                                    if st.button(
-                                        "📝 Resumir texto",
-                                        key=f"summary_{idx}",
-                                        use_container_width=True,
-                                    ):
-                                        processed_text = post_process_text(
-                                            st.session_state["ocr_result"][idx],
-                                            "summary",
-                                        )
-                                        st.session_state["ocr_result"][
-                                            idx
-                                        ] = processed_text
-                                        st.rerun()
-
-                                with action_col2:
-                                    if st.button(
-                                        "🌐 Traducir texto",
-                                        key=f"translate_{idx}",
-                                        use_container_width=True,
-                                    ):
-                                        processed_text = post_process_text(
-                                            st.session_state["ocr_result"][idx],
-                                            "translate",
-                                        )
-                                        st.session_state["ocr_result"][
-                                            idx
-                                        ] = processed_text
-                                        st.rerun()
-
-                                # Campo para chatear con el documento (fuera de expander)
+                            with download_col3:
                                 st.markdown(
-                                    '<h4 style="margin-top: 2rem; margin-bottom: 0.5rem;">Preguntar sobre el documento</h4>',
+                                    create_download_link(
+                                        st.session_state["ocr_result"][idx],
+                                        "text/markdown",
+                                        f"{base_filename}.md",
+                                    ),
                                     unsafe_allow_html=True,
                                 )
+                    else:
+                        st.error("No hay resultados disponibles para este documento.")
 
-                                query = st.text_input(
-                                    "Haz una pregunta sobre este documento",
-                                    key=f"query_{idx}",
-                                    placeholder="Ej: ¿De qué trata este documento?",
-                                    label_visibility="collapsed",
-                                )
-
-                                if query:
-                                    st.info(
-                                        f"**Pregunta:** {query}\n\n**Respuesta:** Esta es una respuesta simulada a tu pregunta sobre el documento. La respuesta real requeriría integración con un modelo de IA adicional para analizar el contenido."
-                                    )
-                        else:
-                            st.error(
-                                "No hay resultados disponibles para este documento."
-                            )
-
-                    st.markdown("</div>", unsafe_allow_html=True)
-else:
-    # Instrucciones visuales cuando no hay archivos
-    st.info(
-        "👆 Selecciona tus archivos PDF o imágenes para extraer el texto con OCR. La aplicación detectará automáticamente el tipo de documento y utilizará el método más adecuado."
+# Información adicional
+st.markdown("---")
+with st.expander("ℹ️ Acerca de Mistral OCR"):
+    st.markdown(
+        """
+    ### Características de Mistral OCR:
+    
+    - Extrae texto manteniendo la estructura y jerarquía del documento
+    - Preserva el formato como encabezados, párrafos, listas y tablas
+    - Devuelve resultados en formato markdown para facilitar el análisis y la representación
+    - Maneja diseños complejos incluyendo texto en múltiples columnas y contenido mixto
+    - Procesa documentos a escala con alta precisión
+    - Soporta múltiples formatos de documento incluyendo PDF, imágenes y documentos cargados
+    
+    ### Limitaciones:
+    - Los archivos PDF subidos no deben exceder los 50 MB de tamaño
+    - Los documentos no deben superar las 1,000 páginas
+    """
     )
 
-# Pie de página
+with st.expander("🔧 Solución de problemas"):
+    st.markdown(
+        """
+    Si encuentras problemas al usar esta aplicación, intenta lo siguiente:
+    
+    1. **Error al procesar imágenes**: 
+       - Asegúrate de que la imagen tenga buen contraste y resolución
+       - Activa la opción "Optimizar imágenes" en las opciones avanzadas
+       - Usa "API REST directa para imágenes" en las opciones avanzadas
+       
+    2. **Error 404 (Not Found)**: 
+       - Verifica que tengas acceso a la API de OCR en tu plan de Mistral
+       - Prueba con el método alternativo "Document Understanding API"
+       
+    3. **Error de API key**: 
+       - Verifica que tu API key de Mistral sea válida y esté correctamente introducida
+       - Asegúrate de que la API key tenga permisos suficientes
+       
+    4. **Error de formato**: 
+       - Asegúrate de que tus archivos sean compatibles (PDF, JPG, PNG)
+       - Verifica que los archivos no estén corruptos
+       
+    5. **Error de tamaño**: 
+       - Los archivos no deben exceder 50 MB
+       - Intenta dividir documentos grandes
+    
+    Para más información, consulta la [documentación oficial de Mistral AI](https://docs.mistral.ai).
+    """
+    )
+
+with st.expander("🛠️ Método curl vs REST API"):
+    st.markdown(
+        """
+    ### Comparación de métodos de procesamiento:
+    
+    Esta aplicación implementa varios métodos para procesar documentos:
+    
+    #### 1. OCR API (mediante cURL)
+    - Llamada directa al endpoint de OCR de Mistral
+    - Permite más control sobre los parámetros
+    - Mejor manejo de archivos grandes
+    - Proporciona información detallada de errores
+    
+    #### 2. API REST directa para imágenes
+    - Método optimizado específicamente para imágenes
+    - Preparación correcta de formato MIME y codificación
+    - Mejor rendimiento y precisión para imágenes
+    - Manejo especial de respuestas para extracción de texto
+    
+    #### 3. Document Understanding API
+    - Utiliza el modelo de chat para extraer texto
+    - Puede funcionar incluso si el OCR directo no está disponible en tu plan
+    - Más lento pero potencialmente más flexible
+    - Útil como método de respaldo
+    
+    La opción "Auto" intenta primero el OCR directo y, si falla, recurre al Document Understanding.
+    """
+    )
+
+# Versión y créditos
+st.markdown("---")
 st.markdown(
     """
 <div style="text-align: center; color: #666;">
