@@ -1579,7 +1579,7 @@ if not st.session_state.get("processing_complete"):
             st.image(
                 "https://images.unsplash.com/photo-1568667256549-094345857637?w=500",
                 caption="OCR y extracción de texto",
-                use_column_width=True,
+                use_container_width=True,
             )
         except Exception:
             # Si no se puede cargar la imagen, mostrar un mensaje alternativo
